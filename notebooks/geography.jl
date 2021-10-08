@@ -10,6 +10,10 @@ begin
 	using CSV
 	using Shapefile
 	using Plots
+	using PolygonOps
+	using LaTeXStrings
+	using Distributions
+	using StatsPlots
 end
 
 # ╔═╡ af7df31b-dafe-4ac7-9a26-958a7c2b3ebe
@@ -35,6 +39,8 @@ df = DataFrame(CSV.File(Xfile));
 # ╔═╡ 256e435f-3471-4eb1-9d59-3db531168b42
 md"""
 To start with, let's just print out all the columns and see what we have. A full description of the data is provided at [DataDriven](https://www.drivendata.org/competitions/7/pump-it-up-data-mining-the-water-table/page/25/)
+
+Additionally, one can find the Shapefile that I'm using throughout this notebook at [OCHA](https://data.humdata.org/dataset/tanzania-administrative-boundaries-level-1-to-3-regions-districts-and-wards-with-2012-population)
 """
 
 # ╔═╡ 00b066f4-1224-4b6f-a335-a3d1da1123f4
@@ -99,9 +105,6 @@ sort(unique(df1.region))
 # ╔═╡ cb4f4a27-8603-4994-9547-9cfa43f81123
 sort(unique(df1.region_code))
 
-# ╔═╡ 8cd0c947-ccd5-4a25-a952-f45ccf561f05
-table.ADM1_PCODE
-
 # ╔═╡ 7e40284e-18d4-4009-8569-36ae24cec7cc
 md"""
 This is a side-bar, but it does relate to the overall data exploration, there seems to be different specifications for region code. In this map: ![](https://mk0mapprpkwwgngeq1o.kinstacdn.com/wp-content/uploads/2021/01/image-428.jpeg)
@@ -125,6 +128,9 @@ md"""
 # ╔═╡ db7e2740-2598-4eb7-a226-8188989b4562
 regions = table.ADM1_EN
 
+# ╔═╡ c576974a-1e1f-4dc0-bfe2-5ed25075b607
+sort(unique(df1.region))
+
 # ╔═╡ 63cef946-7932-433a-9b99-635cf80f5ab0
 setdiff(lowercase.(regions), lowercase.(unique(df1.region)))
 
@@ -145,24 +151,350 @@ Dar-es-Salaam is also in the data, there's just diagreement about one source usi
 Apparently the region coding in the data is not fully accurate though, so that's something I'm going to have to fix especially since I think there are a number of proxy variables that I can use such as the wealth level of the particular administrative region.
 """
 
+# ╔═╡ 9669a2cf-1417-4bc4-808d-858de9371d07
+md"""
+### Re-Mapping Points to Correct Administrative Region
+
+To accomplish this task, I'll investigate the package: [PolygonOps.jl](https://github.com/JuliaGeometry/PolygonOps.jl). They have a function `inpolygon` which seems to implement a $2018$ paper titled *Optimal Reliable Point-in-Polygon Test and Differential Coding Boolean Operations on Polygons*. We'll see if it works for our case.
+"""
+
+# ╔═╡ 906f44f9-403d-411d-943e-d873795887fe
+idx = findall(x -> x == "Arusha", df1.region)[1]
+
+# ╔═╡ dab8667a-68b4-4bd4-96f6-dab0429cef73
+lon, lat = df1[idx, ["longitude", "latitude"]]
+
+# ╔═╡ 0e4f8f63-a2d5-438c-a580-e4a023467f4b
+arusha = copy(shp[1].points)
+
+# ╔═╡ a5c07da4-13a6-4a71-a187-aea28ea74add
+push!(arusha, shp[1].points[1])
+
+# ╔═╡ 85305f5f-177f-4b2c-9c84-cf1708eb6779
+begin
+	P = []
+	for i = 1:length(arusha)
+		push!(P, (arusha[i].x, arusha[i].y))
+	end
+	push!(P, (arusha[1].x, arusha[1].y))
+end
+
+# ╔═╡ 7587cc2a-64c7-40ab-af26-237eab25f41c
+inpolygon((lon, lat), P)
+
+# ╔═╡ 212d38a9-1d7c-4661-9c3f-defb707a86b6
+md"""
+So (assuming that the sample I selected is actually in Arusha) the `inpolygon` algorithm appears to work. To make it work I had to add the final point of the polygon to the end per the documentation at `PolygonOps.jl`. To generalize this approach to update the region value for each of the samples in the data, I need to have an algorithm that does approximately the following:
+
+* Generates a polygon dictionary that maps each of the regions with their associated shapefile
+
+* For each sample and each polygon, check if a particular (longitude, latitude) pair belongs to a particular region.
+  * A good heuristic to improve computational performance would be to assume that the particular sample is correct and then check that. If it does belong to the polygon then we're good and don't have to check the other $30$ regions; otherwise, we'll have to do an exhaustive search.
+"""
+
+# ╔═╡ 0ffc9737-879a-48eb-8345-edaba4fb83f3
+function create_polygon_dict(shp, regions)
+	d = Dict()
+	
+	for (i, region) in enumerate(regions)
+		P = []
+		pts = shp[i].points
+		for j = 1:length(pts)
+			push!(P, (pts[j].x, pts[j].y))
+		end
+		
+		# The PolygonOps.jl package requires the first & last entry to be the same
+		push!(P, (pts[1].x, pts[1].y))
+		d[region] = P
+	end
+	
+	return d
+end
+
+# ╔═╡ 4305c38e-4b50-49b8-97b7-66e7265279d6
+function check_region(df, shp, regions)
+	n = size(df, 1)
+	d = create_polygon_dict(shp, regions)
+	new_regions = Vector{String}(undef, n)
+	
+	for i = 1:n
+		lon, lat = df[i, ["longitude", "latitude"]]
+		curr_region = df[i, "region"]
+		
+		# Do a simple check if the proposed region is correct; o.w. have to do 
+		# an exhaustive search
+		val = inpolygon((lon, lat), d[curr_region])
+		if val == 1
+			new_regions[i] = curr_region
+		else
+			for region in setdiff(regions, [curr_region])
+				val = inpolygon((lon, lat), d[region])
+				if val == 1
+					new_regions[i] = region
+				end
+			end
+		end
+	end
+	
+	return new_regions
+end
+
+# ╔═╡ 5f2428c8-3a0b-4001-910a-94ac3465fc16
+md"""
+Now that I've define the two key functions to re-map the regions according to the Shapefiles, I just have to make sure the `regions` vector agrees with how its spelled in the data to ensure that works. Once I've done that computation we can then see if there are in fact water pumps not present in particular administrative regions.
+"""
+
+# ╔═╡ 26a65919-7896-40b8-8fb1-813f409f406f
+df1.region = lowercase.(df1.region)
+
+# ╔═╡ d5f34bc0-b1ee-402b-8033-04bfdefa1980
+sort(unique(df1.region))
+
+# ╔═╡ b088c955-8587-4128-b045-9c72c92acc9c
+regions
+
+# ╔═╡ 2d3ed9dd-c97a-43cc-b572-64f7979bc0c1
+regions[2] = replace.(regions[2], "-" => " ")
+
+# ╔═╡ 65c7a621-045d-4996-ad67-36dea8765167
+test_regions = check_region(df1[1:100, :], shp, lowercase.(regions))
+
+# ╔═╡ 67bc4d3d-e660-4a7b-bd70-616e38774be8
+df1.region[1]
+
+# ╔═╡ 30c130da-0c1d-476a-9c18-f8b509c4db9e
+md"""
+This sequence of computations is trivially parallelizable, but I don't want to kill my computer by doing it over the ~$57$k samples in the data. I'll see if I can get a Rivanna slot so that I can expedite this data transformation (along with others that I'm sure will come up). 
+
+One item of concern though is that I see an `#undef` in the above vector. That suggests for the particular sample that the (lon, lat) coordinate did not belong to any of the polygons. This could mean it is on the border or that sample doesn't belong to TZA in general. What I'll do is expand the function to account for samples being on the border of the polygon
+"""
+
+# ╔═╡ d3183657-d469-4257-a14a-b3584a16c18f
+test_regions[end-7]
+
+# ╔═╡ 7a733e15-8531-4213-aea8-220664a3bfb9
+df1[93, ["region", "longitude", "latitude"]]
+
+# ╔═╡ 79956456-d383-48ba-8083-6fe8195af521
+polygon_dict = create_polygon_dict(shp, lowercase.(regions))
+
+# ╔═╡ d9c7ddbf-5e78-4430-9d2d-cf283536fd47
+inpolygon((df1[93, "longitude"], df1[93, "latitude"]), polygon_dict["kagera"])
+
+# ╔═╡ d8afca88-c70e-469f-b166-7e59eb635ae1
+begin
+	p3 = plot(shp[6])
+	scatter!(p3, [df1[93, "longitude"]], [df1[93, "latitude"]])
+end
+
+# ╔═╡ 0654a284-ac3a-4c96-8814-5d4496cca986
+md"""
+That's very strange -- clearly the point is in Kagera, but the `inpolygon` algorithm is saying it's not in the polygon. I'm not sure what to do about that.
+
+It may be prudent to investigate alternative packages because it seems that PolygonOps.jl is breaking for multiple cases in just the first $100$ samples. Additionally, it's likely a reasonable belief that most of the region samples are correct which raises the question (given how computationally intensive this approach is) of whether there's a smarter way to go about this problem.
+"""
+
+# ╔═╡ e8d154a1-0df4-438e-b724-af1773c89f0f
+md"""
+### Regional Re-Mapping Conclusion
+After doing more research it seems that the data is using a different partitioning of administrative regions than the map I showed previously in this notebook. Moreover it seems like there are multiple standards in TZA and there doesn't seem to be universal agreement on how to do so. My working hypothesis is that the Tazanian government changed the administrative regions at some point in the 2010s and this is reflected in the different data standards. So here's what I am going to do:
+
+- We're going to use the region that is provided in the data. The marginal benefit of re-mapping to the $31$ administrative regions using a polygon search algorithm is just not worth it. I imagine the socio-economic differences between a merged region is not that wildly different. This is also compounded by the fact that there seems to be some bugs with the `PolygonOps.jl` package (see the Kagera example above).
+
+- The (longitude, latitude) coordinates will be more useful anyways. My current thoughts are:
+  - There is probbaly a relationship between region and how many working water pumps there are. This could be a function of GDP but it could also be a function of their proximity to water sources (e.g., lakes, etc.)
+  - I suspect there may also be a relationship between locations that are far away from villages and the proportion of working pumps
+"""
+
+# ╔═╡ d58f6eed-8002-4363-820f-b959ff19fa8e
+md"""
+## Regions, Villages, & Water Pump Functionality
+
+After that wonderful escapade into the intricacies of Tanzanian administrative governance, I now want to focus on seeing if there's any sort of relationship between the proportion of functioning water pumps in a given administrative region and its GDP. To start with, let's just investigate the fraction of working water pumps by administrative region.
+"""
+
+# ╔═╡ 219d0f63-0f3d-43f7-86b2-632b5860c4ca
+y = DataFrame(CSV.File(yfile))
+
+# ╔═╡ e1bc52c5-d1fd-4f95-9556-a47fa638086a
+md"""
+Since I got rid of some of the samples that didn't make sense, the ones that I had (longitude, latitude) = (0, 0), I need to account for this in the $\mathbf{y}$ vector by using the `id` column
+"""
+
+# ╔═╡ b4efa4eb-ef53-43f8-8924-31cdf12f4472
+id_set = intersect(y.id, df1.id)
+
+# ╔═╡ f26c71e3-e00f-4bb1-9a8a-2542be992331
+y1 = y[[y.id[i] in id_set for i = 1:length(y.id)], :]
+
+# ╔═╡ be42d511-5f8c-4b9f-b630-82b6d719842d
+md"""
+There are actually three labels in this data: "Functional", "Non-Functional", and "Functional, but Needs Repairs." I want convert this to a binary problem for now (maybe I'll explore generalizing this later on), and so I'm going to map "Needs Repairs" to "Functional" which in turn will be $1$
+"""
+
+# ╔═╡ 17bdcd39-6268-4b46-a29c-8c2c3519a97f
+label_map = Dict("functional" => 1,
+				 "functional needs repair" => 1,
+				 "non functional" => 0)
+
+# ╔═╡ 71a0e20f-6140-4660-93d5-3760d34436ae
+y1.status_group = map(x -> label_map[x], y1.status_group)
+
+# ╔═╡ c630a88d-8d46-4857-beca-c91f96a52901
+first(y1, 5)
+
+# ╔═╡ bf91a72f-ba2a-4adb-abcf-162368f3949a
+df2 = innerjoin(df1, y1, on=:id)
+
+# ╔═╡ 2db8def5-91b1-45bc-b610-cf590a7cfcfd
+function plot_water_pump_prob(df, region)
+	y = df[df.region .== region, "status_group"]
+	n = length(y)
+	p = sum(y) / n
+	
+	b = bar([0, 1], [1-p, p], legend=false)
+	xticks!(b, [0, 1])
+	ylims!(b, (0, 1))
+	title!("$(uppercasefirst(region))")
+	annotate!(b, 1, p+0.1, text(L"\hat p \approx %$(round(p; digits=3))", 12))
+end
+
+# ╔═╡ a496c844-773a-4fef-8d73-8c3a27f6a166
+begin
+	plt_arr = []
+	for region in sort(unique(df2.region))
+		push!(plt_arr, plot_water_pump_prob(df2, region))
+	end
+	
+	plot(plt_arr..., size=(1000, 800))
+end
+
+# ╔═╡ 23120c0d-cdb7-4a08-a9f6-ef3925858f34
+md"""
+It's interesting how varied the functionality distribution is across the regions. However, it's also noteworthy that there are a number of water pumps that have no population around it. IMO, I don't see why we would care about those water pumps. If they're not near any sort of servicing population then it's irrelevant whether it works or not.
+
+I'll compute population distribution below.
+"""
+
+# ╔═╡ d78c876a-0909-465e-9601-2458a4202ba1
+histogram(log.(df2.population), legend=false, title="Population Distribution",
+          xlabel="Log(Population)")
+
+# ╔═╡ 47756a1e-e65f-49b2-8af8-35c0fdd1cca1
+sum(df2.population .== 0)
+
+# ╔═╡ 2c7b4262-2024-41be-8d5a-130335936ea3
+md"""
+It seems like approximately $\frac{1}{3}$ of the data is a sample that does not service any particular population. Let's just drop those rows.
+"""
+
+# ╔═╡ d75a6759-e94d-4d4d-b9a4-a9937758a5e9
+df3 = df2[df2.population .> 0, :];
+
+# ╔═╡ ca59a81f-2e2c-4306-aa87-8c1a362921c2
+begin
+	plt_arr1 = []
+	for region in sort(unique(df3.region))
+		push!(plt_arr1, plot_water_pump_prob(df3, region))
+	end
+	
+	plot(plt_arr1..., size=(1000, 800))
+end
+
+# ╔═╡ 97319a31-c30d-4f28-ae4e-ff68ac0b2907
+md"""
+Unsurprisingly the distribution has changed a little bit. In general it seems like the working proportion has gone up which makes sense to me.
+
+Interestingly we also lost four regions who apparently all have servicing populations of zero. That seems very surprising to me that all of the wells in Dodoma (the capital region of Tanzania) has a servicing population of zero. That doesn't make much sense, but I'm also not sure how I can fix that. I suppose I could try to infer the population by looking at the village/area the water pump services, but I'm not sure how accurate Tanzania's census data is. That is something I'll have to investigate.
+
+It looks like Tanzania did its last census in 2012 (apparently the next one is in 2022). The database is stored by the [National Bureau of Statistics](http://www.dataforall.org/CensusInfoTanzania/libraries/aspx/Home.aspx). Unfortunately I don't think using the census data is going to work. To get that data I would have to web scrape their database, and it's not clear the benefit will be worth the effort. For now, we'll just ignore all the samples that don't have any population and put this as a "Future Work" (like the region re-mapping).
+
+One thing that may be valuable to explore though is that the above plot reflects the MLE, $\hat{p}$ of the probability of a pump working in a particular region. Of course we should reflect our uncertainty in that estimate. Therefore I think it would be wise to have the following mathematical construction: Let $R$ be the set of regions and $F \in \{0, 1\}$ be the event that a particular waterpump is functioning. We can therefore construct an empirical prior as follows:
+
+```math
+\begin{equation*}
+	F_i \vert R \stackrel{iid}{\sim} \text{Beta}(a_r, b_r)
+\end{equation*}
+```
+
+where $a_r$ and $b_r$ define the number of functioning and non-functioning water pumps in region $r$. Let's try plotting it for each of the regions to see what that distribution looks like.
+"""
+
+# ╔═╡ bb0d3044-8c4e-4506-9be0-f8633e3ac4c4
+function plot_beta_distn(df, region)
+	y = df[df.region .== region, "status_group"]
+	a = sum(y .== 1)
+	b = sum(y .== 0)
+	
+	p = plot(Beta(a, b), legend=false)
+	title!("$(uppercasefirst(region))")
+	xlabel!(p, L"p")
+end
+
+# ╔═╡ 6b8ae7dc-8e96-4aa3-a2a8-8953219a2790
+begin
+	plt_arr2 = []
+	for region in sort(unique(df3.region))
+		push!(plt_arr2, plot_beta_distn(df3, region))
+	end
+	
+	plot(plt_arr2..., size=(1000, 800), link=:y)
+end
+
+# ╔═╡ 44772725-9b2e-459f-9920-433cf1cf6303
+md"""
+Unsurprisingly a number of the distribution have very tight probability estimates given the sheer number of samples associated with the region. However for others like Mwanza, by using the beta distribution it allows us to express our uncertainty about the value which I think will be helpful when we eventually build a Bayesian model. However, the claim that samples are iid in a particular region is probbaly not true. I imagine there are spatial correlations. We'll explore that more later.
+"""
+
+# ╔═╡ bbbf5e13-ad5b-4602-8962-b4c96a06d1ba
+md"""
+# Conclusion
+This notebook is getting a bit long and I'm going to have to do some web-scraping to get the GDP data for my next analysis which I think is a completely separate effort and so I want to write some final thoughts about basic data transformations I did during this process so I can be more systematic in building a data transformation pipeline in the future
+
+## Data Transformations
+1. Removed data points that had (longitude, latitude) = (0, 0)
+2. Removed samples that had a population of zero around the water pump
+3. Identified the intersection between the `id` from the $\mathbf{X}$ and $\mathbf{y}$ and did an inner-join
+
+## Final Thoughts
+* To appropriately scale this work we're just going to use the regions provided in the data
+  * As noted this is quite strange given that the Tanzanian government currently considers there to be $31$ administrative regions, but the amount of work to re-map the value based on coordinates would be way more than the benefit
+* It is quite likely that the population values, particularly the ones listed as zero, are wrong. However the TZA census data is not particularly amenable to aligning with the subvillages and for many of them it seemed like it was last collected in 2002. If I continue in this vein that would be something to correct, but it's fine to just drop the zero rows for now.
+* Clearly and unsurprisingly there are differences in water-pump functionality across the regions. I fit an iid Beta distribution for each of these regions, but I suspect that there are spatial correlations that we'll need to consider. Additionally, I want to explore other explanation for why there are differences. They could be economic as I inted to explore in the next notebook, but there are other plausible explanations as well. 
+"""
+
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
+PolygonOps = "647866c9-e3ac-4575-94e7-e3d426903924"
 Shapefile = "8e980c4a-a4fe-5da2-b3a7-4b4b0353a2f4"
+StatsPlots = "f3b207a7-027a-5e70-b257-86293d7955fd"
 
 [compat]
 CSV = "~0.8.5"
 DataFrames = "~1.2.2"
+Distributions = "~0.25.18"
+LaTeXStrings = "~1.2.1"
 Plots = "~1.22.4"
+PolygonOps = "~0.1.2"
 Shapefile = "~0.7.1"
+StatsPlots = "~0.14.28"
 """
 
 # ╔═╡ 00000000-0000-0000-0000-000000000002
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
+
+[[AbstractFFTs]]
+deps = ["LinearAlgebra"]
+git-tree-sha1 = "485ee0867925449198280d4af84bdb46a2a404d0"
+uuid = "621f4979-c628-5d54-868e-fcf4e3e8185c"
+version = "1.0.1"
 
 [[Adapt]]
 deps = ["LinearAlgebra"]
@@ -173,8 +505,26 @@ version = "3.3.1"
 [[ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
 
+[[Arpack]]
+deps = ["Arpack_jll", "Libdl", "LinearAlgebra"]
+git-tree-sha1 = "2ff92b71ba1747c5fdd541f8fc87736d82f40ec9"
+uuid = "7d9fca2a-8960-54d3-9f78-7d1dccf2cb97"
+version = "0.4.0"
+
+[[Arpack_jll]]
+deps = ["Libdl", "OpenBLAS_jll", "Pkg"]
+git-tree-sha1 = "e214a9b9bd1b4e1b4f15b22c0994862b66af7ff7"
+uuid = "68821587-b530-5797-8361-c406ea357684"
+version = "3.5.0+3"
+
 [[Artifacts]]
 uuid = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
+
+[[AxisAlgorithms]]
+deps = ["LinearAlgebra", "Random", "SparseArrays", "WoodburyMatrices"]
+git-tree-sha1 = "a4d07a1c313392a77042855df46c5f534076fab9"
+uuid = "13072b0f-2c55-5437-9ae7-d433b7a33950"
+version = "1.0.0"
 
 [[Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
@@ -196,6 +546,18 @@ deps = ["Artifacts", "Bzip2_jll", "Fontconfig_jll", "FreeType2_jll", "Glib_jll",
 git-tree-sha1 = "f2202b55d816427cd385a9a4f3ffb226bee80f99"
 uuid = "83423d85-b0ee-5818-9007-b63ccbeb887a"
 version = "1.16.1+0"
+
+[[ChainRulesCore]]
+deps = ["Compat", "LinearAlgebra", "SparseArrays"]
+git-tree-sha1 = "a325370b9dd0e6bf5656a6f1a7ae80755f8ccc46"
+uuid = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+version = "1.7.2"
+
+[[Clustering]]
+deps = ["Distances", "LinearAlgebra", "NearestNeighbors", "Printf", "SparseArrays", "Statistics", "StatsBase"]
+git-tree-sha1 = "75479b7df4167267d75294d14b58244695beb2ac"
+uuid = "aaaa29a8-35af-508c-8bc3-b662a17a0fe5"
+version = "0.14.2"
 
 [[ColorSchemes]]
 deps = ["ColorTypes", "Colors", "FixedPointNumbers", "Random"]
@@ -264,6 +626,12 @@ git-tree-sha1 = "bfc1187b79289637fa0ef6d4436ebdfe6905cbd6"
 uuid = "e2d170a0-9d28-54be-80f0-106bbe20a464"
 version = "1.0.0"
 
+[[DataValues]]
+deps = ["DataValueInterfaces", "Dates"]
+git-tree-sha1 = "d88a19299eba280a6d062e135a43f00323ae70bf"
+uuid = "e7dc6d0d-1eca-5fa6-8ad6-5aecde8b7ea5"
+version = "0.4.13"
+
 [[Dates]]
 deps = ["Printf"]
 uuid = "ade2ca70-3891-5945-98fb-dc099432e06a"
@@ -272,9 +640,27 @@ uuid = "ade2ca70-3891-5945-98fb-dc099432e06a"
 deps = ["Mmap"]
 uuid = "8bb1440f-4735-579b-a4ab-409b98df4dab"
 
+[[Distances]]
+deps = ["LinearAlgebra", "Statistics", "StatsAPI"]
+git-tree-sha1 = "9f46deb4d4ee4494ffb5a40a27a2aced67bdd838"
+uuid = "b4f34e82-e78d-54a5-968a-f98e89d6e8f7"
+version = "0.10.4"
+
 [[Distributed]]
 deps = ["Random", "Serialization", "Sockets"]
 uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
+
+[[Distributions]]
+deps = ["ChainRulesCore", "FillArrays", "LinearAlgebra", "PDMats", "Printf", "QuadGK", "Random", "SparseArrays", "SpecialFunctions", "Statistics", "StatsBase", "StatsFuns"]
+git-tree-sha1 = "ff7890c74e2eaffbc0b3741811e3816e64b6343d"
+uuid = "31c24e10-a181-5473-b8eb-7969acd0382f"
+version = "0.25.18"
+
+[[DocStringExtensions]]
+deps = ["LibGit2"]
+git-tree-sha1 = "a32185f5428d3986f47c2ab78b1f216d5e6cc96f"
+uuid = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
+version = "0.8.5"
 
 [[Downloads]]
 deps = ["ArgTools", "LibCURL", "NetworkOptions"]
@@ -303,6 +689,24 @@ deps = ["Artifacts", "Bzip2_jll", "FreeType2_jll", "FriBidi_jll", "JLLWrappers",
 git-tree-sha1 = "d8a578692e3077ac998b50c0217dfd67f21d1e5f"
 uuid = "b22a6f82-2f65-5046-a5b2-351ab43fb4e5"
 version = "4.4.0+0"
+
+[[FFTW]]
+deps = ["AbstractFFTs", "FFTW_jll", "LinearAlgebra", "MKL_jll", "Preferences", "Reexport"]
+git-tree-sha1 = "463cb335fa22c4ebacfd1faba5fde14edb80d96c"
+uuid = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
+version = "1.4.5"
+
+[[FFTW_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
+git-tree-sha1 = "c6033cc3892d0ef5bb9cd29b7f2f0331ea5184ea"
+uuid = "f5851436-0d7a-5f13-b9de-f02708fd171a"
+version = "3.3.10+0"
+
+[[FillArrays]]
+deps = ["LinearAlgebra", "Random", "SparseArrays", "Statistics"]
+git-tree-sha1 = "29890dfbc427afa59598b8cfcc10034719bd7744"
+uuid = "1a297f60-69ca-5386-bcde-b61e274b549b"
+version = "0.12.6"
 
 [[FixedPointNumbers]]
 deps = ["Statistics"]
@@ -409,14 +813,31 @@ git-tree-sha1 = "098e4d2c533924c921f9f9847274f2ad89e018b8"
 uuid = "83e8ac13-25f8-5344-8a64-a9f2b223428f"
 version = "0.5.0"
 
+[[IntelOpenMP_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
+git-tree-sha1 = "d979e54b71da82f3a65b62553da4fc3d18c9004c"
+uuid = "1d5cc7b8-4909-519e-a0f8-d0f5ad9712d0"
+version = "2018.0.3+2"
+
 [[InteractiveUtils]]
 deps = ["Markdown"]
 uuid = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
+
+[[Interpolations]]
+deps = ["AxisAlgorithms", "ChainRulesCore", "LinearAlgebra", "OffsetArrays", "Random", "Ratios", "Requires", "SharedArrays", "SparseArrays", "StaticArrays", "WoodburyMatrices"]
+git-tree-sha1 = "61aa005707ea2cebf47c8d780da8dc9bc4e0c512"
+uuid = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
+version = "0.13.4"
 
 [[InvertedIndices]]
 git-tree-sha1 = "bee5f1ef5bf65df56bdd2e40447590b272a5471f"
 uuid = "41ab1584-1d38-5bbf-9106-f11c6c58b48f"
 version = "1.1.0"
+
+[[IrrationalConstants]]
+git-tree-sha1 = "f76424439413893a832026ca355fe273e93bce94"
+uuid = "92d709cd-6900-40b7-9082-c6be49f344b6"
+version = "0.1.0"
 
 [[IterTools]]
 git-tree-sha1 = "05110a2ab1fc5f932622ffea2a003221f4782c18"
@@ -446,6 +867,12 @@ git-tree-sha1 = "d735490ac75c5cb9f1b00d8b5509c11984dc6943"
 uuid = "aacddb02-875f-59d6-b918-886e6ef4fbf8"
 version = "2.1.0+0"
 
+[[KernelDensity]]
+deps = ["Distributions", "DocStringExtensions", "FFTW", "Interpolations", "StatsBase"]
+git-tree-sha1 = "591e8dc09ad18386189610acafb970032c519707"
+uuid = "5ab0869b-81aa-558d-bb23-cbf5423bbe9b"
+version = "0.6.3"
+
 [[LAME_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
 git-tree-sha1 = "f6250b16881adf048549549fba48b1161acdac8c"
@@ -468,6 +895,10 @@ deps = ["Formatting", "InteractiveUtils", "LaTeXStrings", "MacroTools", "Markdow
 git-tree-sha1 = "a4b12a1bd2ebade87891ab7e36fdbce582301a92"
 uuid = "23fbe1c1-3f47-55db-b15f-69d7ec21a316"
 version = "0.15.6"
+
+[[LazyArtifacts]]
+deps = ["Artifacts", "Pkg"]
+uuid = "4af54fe1-eca0-43a8-85a7-787d91b784e3"
 
 [[LibCURL]]
 deps = ["LibCURL_jll", "MozillaCACerts_jll"]
@@ -540,8 +971,20 @@ version = "2.36.0+0"
 deps = ["Libdl"]
 uuid = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 
+[[LogExpFunctions]]
+deps = ["ChainRulesCore", "DocStringExtensions", "IrrationalConstants", "LinearAlgebra"]
+git-tree-sha1 = "34dc30f868e368f8a17b728a1238f3fcda43931a"
+uuid = "2ab3a3ac-af41-5b50-aa03-7779005ae688"
+version = "0.3.3"
+
 [[Logging]]
 uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
+
+[[MKL_jll]]
+deps = ["Artifacts", "IntelOpenMP_jll", "JLLWrappers", "LazyArtifacts", "Libdl", "Pkg"]
+git-tree-sha1 = "5455aef09b40e5020e1520f551fa3135040d4ed0"
+uuid = "856f044c-d86e-5d09-b602-aeab76dc8ba7"
+version = "2021.1.1+2"
 
 [[MacroTools]]
 deps = ["Markdown", "Random"]
@@ -580,13 +1023,36 @@ uuid = "a63ad114-7e13-5084-954f-fe012c677804"
 [[MozillaCACerts_jll]]
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
 
+[[MultivariateStats]]
+deps = ["Arpack", "LinearAlgebra", "SparseArrays", "Statistics", "StatsBase"]
+git-tree-sha1 = "8d958ff1854b166003238fe191ec34b9d592860a"
+uuid = "6f286f6a-111f-5878-ab1e-185364afe411"
+version = "0.8.0"
+
 [[NaNMath]]
 git-tree-sha1 = "bfe47e760d60b82b66b61d2d44128b62e3a369fb"
 uuid = "77ba4419-2d1f-58cd-9bb1-8ffee604a2e3"
 version = "0.3.5"
 
+[[NearestNeighbors]]
+deps = ["Distances", "StaticArrays"]
+git-tree-sha1 = "16baacfdc8758bc374882566c9187e785e85c2f0"
+uuid = "b8a86587-4115-5ab1-83bc-aa920d37bbce"
+version = "0.4.9"
+
 [[NetworkOptions]]
 uuid = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
+
+[[Observables]]
+git-tree-sha1 = "fe29afdef3d0c4a8286128d4e45cc50621b1e43d"
+uuid = "510215fc-4207-5dde-b226-833fc4488ee2"
+version = "0.4.0"
+
+[[OffsetArrays]]
+deps = ["Adapt"]
+git-tree-sha1 = "c0e9e582987d36d5a61e650e6e543b9e44d9914b"
+uuid = "6fe1bfb0-de20-5000-8ca7-80f57d26f881"
+version = "1.10.7"
 
 [[Ogg_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -594,11 +1060,25 @@ git-tree-sha1 = "7937eda4681660b4d6aeeecc2f7e1c81c8ee4e2f"
 uuid = "e7412a2a-1a6e-54c0-be00-318e2571c051"
 version = "1.3.5+0"
 
+[[OpenBLAS_jll]]
+deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
+uuid = "4536629a-c528-5b80-bd46-f80d51c5b363"
+
+[[OpenLibm_jll]]
+deps = ["Artifacts", "Libdl"]
+uuid = "05823500-19ac-5b8b-9628-191a04bc5112"
+
 [[OpenSSL_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
 git-tree-sha1 = "15003dcb7d8db3c6c857fda14891a539a8f2705a"
 uuid = "458c3c95-2e84-50aa-8efc-19380b2a3a95"
 version = "1.1.10+0"
+
+[[OpenSpecFun_jll]]
+deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "Libdl", "Pkg"]
+git-tree-sha1 = "13652491f6856acfd2db29360e1bbcd4565d04f1"
+uuid = "efe28fd5-8261-553b-a9e1-b2916fc3738e"
+version = "0.5.5+0"
 
 [[Opus_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -616,6 +1096,12 @@ deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
 git-tree-sha1 = "b2a7af664e098055a7529ad1a900ded962bca488"
 uuid = "2f80f16e-611a-54ab-bc61-aa92de5b98fc"
 version = "8.44.0+0"
+
+[[PDMats]]
+deps = ["LinearAlgebra", "SparseArrays", "SuiteSparse"]
+git-tree-sha1 = "4dd403333bcf0909341cfe57ec115152f937d7d8"
+uuid = "90014a1f-27ba-587c-ab20-58faa44d9150"
+version = "0.11.1"
 
 [[Parsers]]
 deps = ["Dates"]
@@ -651,6 +1137,11 @@ git-tree-sha1 = "6841db754bd01a91d281370d9a0f8787e220ae08"
 uuid = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 version = "1.22.4"
 
+[[PolygonOps]]
+git-tree-sha1 = "77b3d3605fc1cd0b42d95eba87dfcd2bf67d5ff6"
+uuid = "647866c9-e3ac-4575-94e7-e3d426903924"
+version = "0.1.2"
+
 [[PooledArrays]]
 deps = ["DataAPI", "Future"]
 git-tree-sha1 = "a193d6ad9c45ada72c14b731a318bedd3c2f00cf"
@@ -679,6 +1170,12 @@ git-tree-sha1 = "ad368663a5e20dbb8d6dc2fddeefe4dae0781ae8"
 uuid = "ea2cea3b-5b76-57ae-a6ef-0a8af62496e1"
 version = "5.15.3+0"
 
+[[QuadGK]]
+deps = ["DataStructures", "LinearAlgebra"]
+git-tree-sha1 = "78aadffb3efd2155af139781b8a8df1ef279ea39"
+uuid = "1fd47b50-473d-5c70-9696-f719f8f3bcdc"
+version = "2.4.2"
+
 [[REPL]]
 deps = ["InteractiveUtils", "Markdown", "Sockets", "Unicode"]
 uuid = "3fa0cd96-eef1-5676-8a61-b3b8758bbffb"
@@ -686,6 +1183,12 @@ uuid = "3fa0cd96-eef1-5676-8a61-b3b8758bbffb"
 [[Random]]
 deps = ["Serialization"]
 uuid = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+
+[[Ratios]]
+deps = ["Requires"]
+git-tree-sha1 = "01d341f502250e81f6fec0afe662aa861392a3aa"
+uuid = "c84ed2f1-dad5-54f0-aa8e-dbefe2724439"
+version = "0.4.2"
 
 [[RecipesBase]]
 git-tree-sha1 = "44a75aa7a527910ee3d1751d1f0e4148698add9e"
@@ -708,6 +1211,18 @@ deps = ["UUIDs"]
 git-tree-sha1 = "4036a3bd08ac7e968e27c203d45f5fff15020621"
 uuid = "ae029012-a4dd-5104-9daa-d747884805df"
 version = "1.1.3"
+
+[[Rmath]]
+deps = ["Random", "Rmath_jll"]
+git-tree-sha1 = "bf3188feca147ce108c76ad82c2792c57abe7b1f"
+uuid = "79098fc4-a85e-5d69-aa6a-4863f24498fa"
+version = "0.7.0"
+
+[[Rmath_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
+git-tree-sha1 = "68db32dff12bb6127bac73c209881191bf0efbb7"
+uuid = "f50d1b31-88e8-58de-be2c-1cc44531875f"
+version = "0.3.0+0"
 
 [[SHA]]
 uuid = "ea8e919c-243c-51af-8825-aaa63cd721ce"
@@ -756,6 +1271,12 @@ version = "1.0.1"
 deps = ["LinearAlgebra", "Random"]
 uuid = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 
+[[SpecialFunctions]]
+deps = ["ChainRulesCore", "IrrationalConstants", "LogExpFunctions", "OpenLibm_jll", "OpenSpecFun_jll"]
+git-tree-sha1 = "793793f1df98e3d7d554b65a107e9c9a6399a6ed"
+uuid = "276daf66-3868-5448-9aa4-cd146d93841b"
+version = "1.7.0"
+
 [[StaticArrays]]
 deps = ["LinearAlgebra", "Random", "Statistics"]
 git-tree-sha1 = "3c76dde64d03699e074ac02eb2e8ba8254d428da"
@@ -777,15 +1298,37 @@ git-tree-sha1 = "8cbbc098554648c84f79a463c9ff0fd277144b6c"
 uuid = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 version = "0.33.10"
 
+[[StatsFuns]]
+deps = ["ChainRulesCore", "IrrationalConstants", "LogExpFunctions", "Reexport", "Rmath", "SpecialFunctions"]
+git-tree-sha1 = "95072ef1a22b057b1e80f73c2a89ad238ae4cfff"
+uuid = "4c63d2b9-4356-54db-8cca-17b64c39e42c"
+version = "0.9.12"
+
+[[StatsPlots]]
+deps = ["Clustering", "DataStructures", "DataValues", "Distributions", "Interpolations", "KernelDensity", "LinearAlgebra", "MultivariateStats", "Observables", "Plots", "RecipesBase", "RecipesPipeline", "Reexport", "StatsBase", "TableOperations", "Tables", "Widgets"]
+git-tree-sha1 = "eb007bb78d8a46ab98cd14188e3cec139a4476cf"
+uuid = "f3b207a7-027a-5e70-b257-86293d7955fd"
+version = "0.14.28"
+
 [[StructArrays]]
 deps = ["Adapt", "DataAPI", "StaticArrays", "Tables"]
 git-tree-sha1 = "2ce41e0d042c60ecd131e9fb7154a3bfadbf50d3"
 uuid = "09ab397b-f2b6-538f-b94a-2f83cf4a842a"
 version = "0.6.3"
 
+[[SuiteSparse]]
+deps = ["Libdl", "LinearAlgebra", "Serialization", "SparseArrays"]
+uuid = "4607b0f0-06f3-5cda-b6b1-a6196a1729e9"
+
 [[TOML]]
 deps = ["Dates"]
 uuid = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
+
+[[TableOperations]]
+deps = ["SentinelArrays", "Tables", "Test"]
+git-tree-sha1 = "019acfd5a4a6c5f0f38de69f2ff7ed527f1881da"
+uuid = "ab02a1b2-a7df-11e8-156e-fb1833f50b87"
+version = "1.1.0"
 
 [[TableTraits]]
 deps = ["IteratorInterfaceExtensions"]
@@ -836,6 +1379,18 @@ deps = ["DataAPI", "Random", "Test"]
 git-tree-sha1 = "28807f85197eaad3cbd2330386fac1dcb9e7e11d"
 uuid = "ea10d353-3f73-51f8-a26c-33c1cb351aa5"
 version = "0.6.2"
+
+[[Widgets]]
+deps = ["Colors", "Dates", "Observables", "OrderedCollections"]
+git-tree-sha1 = "80661f59d28714632132c73779f8becc19a113f2"
+uuid = "cc8bc4a8-27d6-5769-a93b-9d913e69aa62"
+version = "0.6.4"
+
+[[WoodburyMatrices]]
+deps = ["LinearAlgebra", "SparseArrays"]
+git-tree-sha1 = "59e2ad8fd1591ea019a5259bd012d7aee15f995c"
+uuid = "efce3f68-66dc-5838-9240-27a6d6f5f9b6"
+version = "0.5.3"
 
 [[XML2_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Libiconv_jll", "Pkg", "Zlib_jll"]
@@ -1058,11 +1613,59 @@ version = "0.9.1+5"
 # ╟─3bd619a7-7d54-47e0-a8df-ca117ba9ad35
 # ╠═bd1e2ecf-dd98-4814-b161-190141b497d1
 # ╠═cb4f4a27-8603-4994-9547-9cfa43f81123
-# ╠═8cd0c947-ccd5-4a25-a952-f45ccf561f05
 # ╟─7e40284e-18d4-4009-8569-36ae24cec7cc
 # ╟─5aac270a-3935-4338-9b1b-2fb1fdcef477
 # ╠═db7e2740-2598-4eb7-a226-8188989b4562
+# ╠═c576974a-1e1f-4dc0-bfe2-5ed25075b607
 # ╠═63cef946-7932-433a-9b99-635cf80f5ab0
 # ╟─77e9f470-1df9-481e-b1fa-063508fbd7b9
+# ╟─9669a2cf-1417-4bc4-808d-858de9371d07
+# ╠═906f44f9-403d-411d-943e-d873795887fe
+# ╠═dab8667a-68b4-4bd4-96f6-dab0429cef73
+# ╠═0e4f8f63-a2d5-438c-a580-e4a023467f4b
+# ╠═a5c07da4-13a6-4a71-a187-aea28ea74add
+# ╠═85305f5f-177f-4b2c-9c84-cf1708eb6779
+# ╠═7587cc2a-64c7-40ab-af26-237eab25f41c
+# ╟─212d38a9-1d7c-4661-9c3f-defb707a86b6
+# ╠═0ffc9737-879a-48eb-8345-edaba4fb83f3
+# ╠═4305c38e-4b50-49b8-97b7-66e7265279d6
+# ╟─5f2428c8-3a0b-4001-910a-94ac3465fc16
+# ╠═26a65919-7896-40b8-8fb1-813f409f406f
+# ╠═d5f34bc0-b1ee-402b-8033-04bfdefa1980
+# ╠═b088c955-8587-4128-b045-9c72c92acc9c
+# ╠═2d3ed9dd-c97a-43cc-b572-64f7979bc0c1
+# ╠═65c7a621-045d-4996-ad67-36dea8765167
+# ╠═67bc4d3d-e660-4a7b-bd70-616e38774be8
+# ╟─30c130da-0c1d-476a-9c18-f8b509c4db9e
+# ╠═d3183657-d469-4257-a14a-b3584a16c18f
+# ╠═7a733e15-8531-4213-aea8-220664a3bfb9
+# ╠═79956456-d383-48ba-8083-6fe8195af521
+# ╠═d9c7ddbf-5e78-4430-9d2d-cf283536fd47
+# ╠═d8afca88-c70e-469f-b166-7e59eb635ae1
+# ╟─0654a284-ac3a-4c96-8814-5d4496cca986
+# ╟─e8d154a1-0df4-438e-b724-af1773c89f0f
+# ╟─d58f6eed-8002-4363-820f-b959ff19fa8e
+# ╠═219d0f63-0f3d-43f7-86b2-632b5860c4ca
+# ╟─e1bc52c5-d1fd-4f95-9556-a47fa638086a
+# ╠═b4efa4eb-ef53-43f8-8924-31cdf12f4472
+# ╠═f26c71e3-e00f-4bb1-9a8a-2542be992331
+# ╟─be42d511-5f8c-4b9f-b630-82b6d719842d
+# ╠═17bdcd39-6268-4b46-a29c-8c2c3519a97f
+# ╠═71a0e20f-6140-4660-93d5-3760d34436ae
+# ╠═c630a88d-8d46-4857-beca-c91f96a52901
+# ╠═bf91a72f-ba2a-4adb-abcf-162368f3949a
+# ╠═2db8def5-91b1-45bc-b610-cf590a7cfcfd
+# ╠═a496c844-773a-4fef-8d73-8c3a27f6a166
+# ╟─23120c0d-cdb7-4a08-a9f6-ef3925858f34
+# ╠═d78c876a-0909-465e-9601-2458a4202ba1
+# ╠═47756a1e-e65f-49b2-8af8-35c0fdd1cca1
+# ╟─2c7b4262-2024-41be-8d5a-130335936ea3
+# ╠═d75a6759-e94d-4d4d-b9a4-a9937758a5e9
+# ╠═ca59a81f-2e2c-4306-aa87-8c1a362921c2
+# ╟─97319a31-c30d-4f28-ae4e-ff68ac0b2907
+# ╠═bb0d3044-8c4e-4506-9be0-f8633e3ac4c4
+# ╠═6b8ae7dc-8e96-4aa3-a2a8-8953219a2790
+# ╟─44772725-9b2e-459f-9920-433cf1cf6303
+# ╟─bbbf5e13-ad5b-4602-8962-b4c96a06d1ba
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
