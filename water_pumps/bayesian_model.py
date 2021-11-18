@@ -1,7 +1,9 @@
+from jax import random
 import jax.numpy as jnp
 import numpy.typing as npt
 import numpyro
 import numpyro.distributions as dist
+from numpyro.infer import MCMC, NUTS
 
 
 def uninformed_model(X: npt.NDArray, regions: npt.NDArray, y: npt.NDArray):
@@ -25,3 +27,26 @@ def uninformed_model(X: npt.NDArray, regions: npt.NDArray, y: npt.NDArray):
     β = α[regions] + jnp.dot(X, θ[regions])
     with numpyro.plate('samples', n):
         numpyro.sample('y', dist.Bernoulli(logits=β), obs=y)
+
+
+def empirical_model(X: npt.NDArray, regions: npt.NDArray, y: npt.NDArray):
+    return None
+
+
+def fit_model(X: npt.NDArray, regions: npt.NDArray, y:npt.NDArray, **kwargs):
+    # Giving sensible defaults for MCMC arguments, but allowing user to pass
+    # different ones if they want
+    default_kwargs = {'seed': 17, 'prior': 'uninformed', 'n_warmup': 1000,
+                      'n_samples': 2000}
+    kwargs = {**default_kwargs, **kwargs}
+
+    rng_key = random.PRNGKey(kwargs['seed'])
+
+    if kwargs['prior'] == 'uninformed':
+        kernel = NUTS(uninformed_model)
+    else:
+        kernel = NUTS(empirical_model)
+
+    model = MCMC(kernel, num_warmup=kwargs['n_warmup'], num_samples=kwargs['n_samples'])
+    model.run(rng_key, X, regions, y)
+    return model

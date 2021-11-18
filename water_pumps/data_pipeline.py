@@ -15,9 +15,9 @@ def compute_date_difference(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def prepare_data(Xfile: str, yfile: str) -> pd.DataFrame:
-    df = pd.read_csv(Xfile)
-    y = pd.read_csv(yfile)
+def prepare_data(xfile: str, yfile: str) -> pd.DataFrame:
+    df = pd.read_csv(xfile).set_index('id')
+    y = pd.read_csv(yfile).set_index('id')
 
     # Simplifying the problem to binary versus; can generalize in the future
     label_map = {'functional': 1, 'functional needs repair': 1,
@@ -29,8 +29,13 @@ def prepare_data(Xfile: str, yfile: str) -> pd.DataFrame:
     quantity_map = {'dry': 'dry', 'unknown': 'dry', 'enough': 'enough',
                     'seasonal': 'enough', 'insufficient': 'insufficient'}
 
+    # The model will work with integer value representing the administrative 
+    # regions so I will remap them from the strings to a number
+    unique_regions = np.unique(df.region)
+    region_map = dict(zip(unique_regions, range(len(unique_regions))))
+
     df = (
-        df.query('longitude != 0' & 'population > 0')
+        df.query('longitude != 0 & population > 0')
         .query('construction_year != 0')
         .assign(log_population = np.log(df['population']))
         .join(y, on='id', how='inner')
@@ -38,13 +43,14 @@ def prepare_data(Xfile: str, yfile: str) -> pd.DataFrame:
         .replace({'working_well': label_map})
         .replace({'requires_payment': payment_map})
         .replace({'quantity': quantity_map})
+        .replace({'region': region_map})
         .pipe(compute_date_difference)
     )
 
     # After investigating in the Pluto notebooks, I'm only going to work with
     # a subset of the columns (also removing the LGA & Ward administrative
     # levels)
-    cols = ['id', 'region', 'quantity', 'source', 
+    cols = ['region', 'quantity', 'source', 
             'log_population', 'waterpoint_type', 'log_date_diff',
             'requires_payment', 'working_well']
     df = df.filter(items=cols)
@@ -53,6 +59,9 @@ def prepare_data(Xfile: str, yfile: str) -> pd.DataFrame:
     # one-hot-encode the categorical features
     one_hot_features = ['quantity', 'source', 'waterpoint_type']
     df = pd.get_dummies(df, columns=one_hot_features)
+
+    cols = ['log_date_diff', 'log_population']
+    df[cols] = (df[cols] - df[cols].mean()) / df[cols].std()
 
     # To avoid the issue of perfect multi-collinearity, I have to remove one
     # column from each of the one-hot-features
