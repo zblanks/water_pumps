@@ -42,8 +42,9 @@ def prepare_data(Xfile: str, yfile: str) -> pd.DataFrame:
     )
 
     # After investigating in the Pluto notebooks, I'm only going to work with
-    # a subset of the columns
-    cols = ['id', 'region', 'lga', 'ward', 'quantity', 'source', 
+    # a subset of the columns (also removing the LGA & Ward administrative
+    # levels)
+    cols = ['id', 'region', 'quantity', 'source', 
             'log_population', 'waterpoint_type', 'log_date_diff',
             'requires_payment', 'working_well']
     df = df.filter(items=cols)
