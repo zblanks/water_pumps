@@ -41,7 +41,6 @@ def prepare_data(xfile: str, yfile: str) -> pd.DataFrame:
         .join(y, on='id', how='inner')
         .rename(columns={'status_group': 'working_well'})
         .replace({'working_well': label_map})
-        .replace({'payment_type': payment_map})
         .rename(columns={'payment_type': 'requires_payment'})
         .replace({'requires_payment': payment_map})
         .replace({'quantity': quantity_map})

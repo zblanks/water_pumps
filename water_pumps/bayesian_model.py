@@ -1,10 +1,12 @@
 from jax import random, vmap
+from jax.example_libraries.optimizers import adam
 import jax.numpy as jnp
 import numpy as np
 import numpy.typing as npt
 import numpyro
 import numpyro.distributions as dist
-from numpyro.infer import MCMC, NUTS
+from numpyro.infer import SVI, Trace_ELBO
+from numpyro.infer.autoguide import AutoNormal
 
 
 def compute_logit(α, θ, x):
@@ -41,17 +43,21 @@ def empirical_model(X: npt.NDArray, regions: npt.NDArray, y: npt.NDArray):
 def fit_model(X: npt.NDArray, regions: npt.NDArray, y:npt.NDArray, **kwargs):
     # Giving sensible defaults for MCMC arguments, but allowing user to pass
     # different ones if they want
-    default_kwargs = {'seed': 17, 'prior': 'uninformed', 'n_warmup': 1000,
-                      'n_samples': 2000}
+    default_kwargs = {'seed': 17, 'prior': 'uninformed', 'step_size': 0.005,
+                      'n_steps': 10000}
     kwargs = {**default_kwargs, **kwargs}
 
     rng_key = random.PRNGKey(kwargs['seed'])
 
     if kwargs['prior'] == 'uninformed':
-        kernel = NUTS(uninformed_model)
+        guide = AutoNormal(uninformed_model)
+        model = SVI(uninformed_model, guide, 
+                    adam(step_size=kwargs['step_size']), Trace_ELBO())
     else:
-        kernel = NUTS(empirical_model)
+        guide = AutoNormal(empirical_model)
+        model = SVI(empirical_model, guide,
+                    adam(step_size=kwargs['step_size']), Trace_ELBO())
+    
+    model_result = model.run(rng_key, kwargs['n_steps'], X, regions, y)
 
-    model = MCMC(kernel, num_warmup=kwargs['n_warmup'], num_samples=kwargs['n_samples'])
-    model.run(rng_key, X, regions, y)
-    return model
+    return model_result, guide
