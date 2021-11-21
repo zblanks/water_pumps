@@ -29,11 +29,6 @@ def prepare_data(xfile: str, yfile: str) -> pd.DataFrame:
     quantity_map = {'dry': 'dry', 'unknown': 'dry', 'enough': 'enough',
                     'seasonal': 'enough', 'insufficient': 'insufficient'}
 
-    # The model will work with integer value representing the administrative 
-    # regions so I will remap them from the strings to a number
-    unique_regions = np.unique(df.region)
-    region_map = dict(zip(unique_regions, range(len(unique_regions))))
-
     df = (
         df.query('longitude != 0 & population > 0')
         .query('construction_year != 0')
@@ -44,9 +39,14 @@ def prepare_data(xfile: str, yfile: str) -> pd.DataFrame:
         .rename(columns={'payment_type': 'requires_payment'})
         .replace({'requires_payment': payment_map})
         .replace({'quantity': quantity_map})
-        .replace({'region': region_map})
         .pipe(compute_date_difference)
     )
+
+    # The model will work with integer value representing the administrative 
+    # regions so I will remap them from the strings to a number
+    unique_regions = np.sort(df.region.unique())
+    region_map = dict(zip(unique_regions, range(len(unique_regions))))
+    df = df.replace({'region': region_map})
 
     # After investigating in the Pluto notebooks, I'm only going to work with
     # a subset of the columns (also removing the LGA & Ward administrative

@@ -13,7 +13,7 @@ if __name__ == '__main__':
     y = df['working_well'].to_numpy()
     regions = df['region'].to_numpy()
 
-    model, guide = fit_model(X[:1000, :], regions[:1000], y[:1000])
+    model, guide = fit_model(X, regions, y, prior='empirical')
     predictive = Predictive(guide, params=model.params, num_samples=50)
     results = predictive(random.PRNGKey(17))
     print(results)

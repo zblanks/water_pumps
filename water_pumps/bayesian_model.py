@@ -7,6 +7,8 @@ import numpyro
 import numpyro.distributions as dist
 from numpyro.infer import SVI, Trace_ELBO
 from numpyro.infer.autoguide import AutoNormal
+from scipy.stats import beta, norm
+from sklearn.linear_model import LogisticRegression
 
 
 def compute_logit(α, θ, x):
@@ -36,8 +38,40 @@ def uninformed_model(X: npt.NDArray, regions: npt.NDArray, y: npt.NDArray):
         numpyro.sample('y', dist.Bernoulli(logits=β), obs=y)
 
 
-def empirical_model(X: npt.NDArray, regions: npt.NDArray, y: npt.NDArray):
-    return None
+def compute_region_params(y: npt.NDArray):
+    m = y.mean()
+    α = len(y) * m
+    β = len(y) - α
+
+    samples = beta.rvs(α, β, size=1000, random_state=17)
+    logit_samples = np.log(samples / (1 - samples))
+    μ, σ = norm.fit(logit_samples)
+    return μ, σ
+
+
+def compute_feature_params(X: npt.NDArray, y: npt.NDArray):
+    model = LogisticRegression(fit_intercept=False, random_state=17)
+    model.fit(X, y)
+    θ = model.coef_
+    
+    w = X @ θ.T
+    w = jnp.exp(w) / jnp.square(1 + jnp.exp(w))
+    jnp.diag(w).shape
+    return θ, X.T @ jnp.diag(w.flatten()) @ X
+
+
+def empirical_model(X: npt.NDArray, regions: npt.NDArray, y: npt.NDArray,
+                    μ_a: float, σ_a: float, μ: npt.NDArray, τ: npt.NDArray):
+    n, _ = X.shape
+    n_regions = len(np.unique(regions))
+
+    with numpyro.plate('regions', n_regions):
+        α = numpyro.sample('α', dist.Normal(μ_a, σ_a))
+        θ = numpyro.sample('θ', dist.MultivariateNormal(μ, precision_matrix=τ))
+
+    β = vmap(compute_logit, in_axes=0)(α[regions], θ[regions], X)
+    with numpyro.plate('samples', n):
+        numpyro.sample('y', dist.Bernoulli(logits=β), obs=y)
 
 
 def fit_model(X: npt.NDArray, regions: npt.NDArray, y:npt.NDArray, **kwargs):
@@ -54,10 +88,14 @@ def fit_model(X: npt.NDArray, regions: npt.NDArray, y:npt.NDArray, **kwargs):
         model = SVI(uninformed_model, guide, 
                     adam(step_size=kwargs['step_size']), Trace_ELBO())
     else:
+        μ_a, σ_a = compute_region_params(y)
+        μ, τ = compute_feature_params(X, y)
+
         guide = AutoNormal(empirical_model)
         model = SVI(empirical_model, guide,
                     adam(step_size=kwargs['step_size']), Trace_ELBO())
     
-    model_result = model.run(rng_key, kwargs['n_steps'], X, regions, y)
+    model_result = model.run(rng_key, kwargs['n_steps'], X, regions, y, 
+                             μ_a, σ_a, μ, τ)
 
     return model_result, guide
