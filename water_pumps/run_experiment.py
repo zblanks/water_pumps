@@ -1,9 +1,7 @@
 import arviz as az
-from arviz.stats.stats import waic
 from compare_models import compare_models
 from data_pipeline import prepare_data
 import os
-import pandas as pd
 
 
 if __name__ == '__main__':
