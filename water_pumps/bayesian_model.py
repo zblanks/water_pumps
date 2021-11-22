@@ -50,7 +50,7 @@ def compute_region_params(y: npt.NDArray):
 
 
 def compute_feature_params(X: npt.NDArray, y: npt.NDArray):
-    model = LogisticRegression(fit_intercept=False, random_state=17)
+    model = LogisticRegression(fit_intercept=False, random_state=17, max_iter=500)
     model.fit(X, y)
     θ = model.coef_
     
@@ -87,6 +87,8 @@ def fit_model(X: npt.NDArray, regions: npt.NDArray, y:npt.NDArray, **kwargs):
         guide = AutoNormal(uninformed_model)
         model = SVI(uninformed_model, guide, 
                     adam(step_size=kwargs['step_size']), Trace_ELBO())
+        
+        result = model.run(rng_key, kwargs['n_steps'], X, regions, y)
     else:
         μ_a, σ_a = compute_region_params(y)
         μ, τ = compute_feature_params(X, y)
@@ -94,8 +96,7 @@ def fit_model(X: npt.NDArray, regions: npt.NDArray, y:npt.NDArray, **kwargs):
         guide = AutoNormal(empirical_model)
         model = SVI(empirical_model, guide,
                     adam(step_size=kwargs['step_size']), Trace_ELBO())
-    
-    model_result = model.run(rng_key, kwargs['n_steps'], X, regions, y, 
-                             μ_a, σ_a, μ, τ)
+        
+        result = model.run(rng_key, kwargs['n_steps'], X, regions, y, μ_a, σ_a, μ, τ)
 
-    return model_result, guide
+    return result, guide

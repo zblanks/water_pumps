@@ -1,7 +1,9 @@
-from bayesian_model import fit_model
+import arviz as az
+from arviz.stats.stats import waic
+from compare_models import compare_models
 from data_pipeline import prepare_data
-from jax import random
-from numpyro.infer import Predictive
+import os
+import pandas as pd
 
 
 if __name__ == '__main__':
@@ -13,7 +15,14 @@ if __name__ == '__main__':
     y = df['working_well'].to_numpy()
     regions = df['region'].to_numpy()
 
-    model, guide = fit_model(X, regions, y, prior='empirical')
-    predictive = Predictive(guide, params=model.params, num_samples=50)
-    results = predictive(random.PRNGKey(17))
-    print(results)
+    # Compute the WAIC comparison between the empirical and uninformed models
+    model_dict = compare_models(X, regions, y)
+    waic_df = az.compare(
+        {'uninformed': model_dict['uninformed'], 'empirical': model_dict['empirical']},
+        ic='waic', scale='deviance'
+    )
+
+    if not os.path.isdir('results'):
+        os.mkdir('results')
+    
+    waic_df.to_csv('results/waic.csv')
