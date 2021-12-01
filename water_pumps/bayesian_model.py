@@ -40,10 +40,10 @@ def uninformed_model(X: npt.NDArray, regions: npt.NDArray, y: npt.NDArray):
 
 def compute_region_params(y: npt.NDArray):
     m = y.mean()
-    α = len(y) * m
-    β = len(y) - α
+    a = len(y) * m
+    b = len(y) - a
 
-    samples = beta.rvs(α, β, size=1000, random_state=17)
+    samples = beta.rvs(a, b, size=1000, random_state=17)
     logit_samples = np.log(samples / (1 - samples))
     μ, σ = norm.fit(logit_samples)
     return μ, σ
@@ -61,13 +61,21 @@ def compute_feature_params(X: npt.NDArray, y: npt.NDArray):
 
 
 def empirical_model(X: npt.NDArray, regions: npt.NDArray, y: npt.NDArray,
-                    μ_a: float, σ_a: float, μ: npt.NDArray, τ: npt.NDArray):
-    n, _ = X.shape
+                    a: float, b: float, μ: npt.NDArray, τ: npt.NDArray):
+    n, p = X.shape
     n_regions = len(np.unique(regions))
+
+    # Define the empircal hyper-priors for the hierarchical model
+    μ_a = numpyro.sample('μ_a', dist.Normal(a, b))
+    σ_a = numpyro.sample('σ_a', dist.HalfCauchy(5.))
+
+    μ_t = numpyro.sample('μ_t', dist.MultivariateNormal(μ, precision_matrix=τ))
+    σ_t = numpyro.sample('σ_t', dist.HalfCauchy(5.))
+    Σ = jnp.diag(jnp.repeat(σ_t, repeats=p))
 
     with numpyro.plate('regions', n_regions):
         α = numpyro.sample('α', dist.Normal(μ_a, σ_a))
-        θ = numpyro.sample('θ', dist.MultivariateNormal(μ, precision_matrix=τ))
+        θ = numpyro.sample('θ', dist.MultivariateNormal(μ_t, Σ))
 
     β = vmap(compute_logit, in_axes=0)(α[regions], θ[regions], X)
     with numpyro.plate('samples', n):
@@ -90,13 +98,13 @@ def fit_model(X: npt.NDArray, regions: npt.NDArray, y:npt.NDArray, **kwargs):
         
         result = model.run(rng_key, kwargs['n_steps'], X, regions, y)
     else:
-        μ_a, σ_a = compute_region_params(y)
+        a, b = compute_region_params(y)
         μ, τ = compute_feature_params(X, y)
 
         guide = AutoNormal(empirical_model)
         model = SVI(empirical_model, guide,
                     adam(step_size=kwargs['step_size']), Trace_ELBO())
         
-        result = model.run(rng_key, kwargs['n_steps'], X, regions, y, μ_a, σ_a, μ, τ)
+        result = model.run(rng_key, kwargs['n_steps'], X, regions, y, a, b, μ, τ)
 
     return result, guide
