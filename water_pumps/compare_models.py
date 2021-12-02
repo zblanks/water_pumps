@@ -16,7 +16,7 @@ def compute_logprob(model, guide, *args):
         post[key] = post[key].reshape(1, *post[key].shape)
 
     res = az.from_dict(
-        posterior_predictive=post,
+        posterior=post,
         log_likelihood={k: v[None] for k, v in logprob.items()}
     )
     return res

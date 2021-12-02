@@ -5,3 +5,6 @@ __pycache__/
 # Ignore the models folder for stored SVI models
 models/
 results/
+
+# Ignore VSCode Helper files
+.vscode/

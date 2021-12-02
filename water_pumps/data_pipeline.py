@@ -46,13 +46,13 @@ def prepare_data(xfile: str, yfile: str) -> pd.DataFrame:
     # regions so I will remap them from the strings to a number
     unique_regions = np.sort(df.region.unique())
     region_map = dict(zip(unique_regions, range(len(unique_regions))))
-    df = df.replace({'region': region_map})
+    df['region_code'] = df.region.map(region_map)
 
     # After investigating in the Pluto notebooks, I'm only going to work with
     # a subset of the columns (also removing the LGA & Ward administrative
     # levels)
-    cols = ['region', 'quantity', 'source', 
-            'log_population', 'waterpoint_type', 'log_date_diff',
+    cols = ['region', 'region_code', 'quantity', 'source', 'latitude',
+            'longitude', 'log_population', 'waterpoint_type', 'log_date_diff',
             'requires_payment', 'working_well']
     df = df.filter(items=cols)
 
