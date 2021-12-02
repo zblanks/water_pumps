@@ -122,8 +122,72 @@ def plot_repairs(df, y_bound, z_star, key, coords, c, fig=None, ax=None, region=
     ax.scatter(lon, lat, c=y_bound, s=ratio, alpha=0.5, cmap='winter')
     ax.text(0.6, 0.9, s=rf'$\Gamma = {key[0]}$', size=20, transform=ax.transAxes)
     ax.text(0.6, 0.85, s=rf'$B = \${budget_str}$', size=20, transform=ax.transAxes)
-    fig.colorbar(ScalarMappable(cmap='winter'), ax=ax).set_label(r'$\hat y_{i,l}$', fontsize=24)
+    ax.axis('off')
     return ax
+
+
+def create_shadow_plot(df, model, col='log_population', region='Dar es Salaam'):
+    df = df.query(f'region == "{region}"')
+
+    # We need the index for the region and the feature to compute the various
+    # posterior estimates
+    col_idx = df.columns.get_loc(col)
+    region_idx = df.region_code.unique()
+
+    α = np.array(model.posterior['α']).squeeze()[:, region_idx]
+    θ = np.array(model.posterior['θ']).squeeze()[:, region_idx, col_idx]
+
+    # To generate the shadow plot we need to generate  reasonable range of 
+    # samples for the col
+    X = np.linspace(-0.5, 3, num=500).reshape(1, -1)
+
+    βs = α + (θ @ X)
+    logits = 1 / (1 + np.exp(-βs))
+
+    # Also want to show the MAP estimate
+    α_map = α.mean()
+    θ_map = θ.mean()
+    β_map = α_map + (θ_map * X.flatten())
+    logit_map = 1 / (1 + np.exp(-β_map)) 
+
+    plt.rcParams.update({
+        'text.usetex': True,
+        'text.latex.preamble': r'\usepackage{amsfonts}'
+    })
+
+    _, ax = plt.subplots(figsize=(12, 8))
+    for i in range(logits.shape[0]):
+        ax.plot(X.flatten(), logits[i, :], alpha=0.05, c='black')
+    
+    ax.plot(X.flatten(), logit_map, c='blue', linestyle='dashed')
+    ax.set_xlabel('Normalized Log-Population', fontsize=20)
+    ax.set_ylabel(r'$\mathbb{P}$(Working Waterpoint)', fontsize=20)
+    ax.set_title('Logistic Posterior Distributions', fontsize=32)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    plt.savefig('results/shadowplot.pdf', dpi=300, bbox_inches='tight')
+
+
+def make_interval_plot(df, region='Dar es Salaam', prob=0.94):
+    y_hat = np.load('results/y_hat.npy')
+
+    # Let's get a sample where the waterpoint is broken and where it's
+    # functional
+    working_samples = df.query(f'region == "{region}" & working_well == 1').index
+    broken_samples = df.query(f'region == "{region}" & working_well == 0').index
+
+    working_sample = df.index.get_loc(working_samples[0])
+    broken_sample = df.index.get_loc(broken_samples[0])
+
+    y_working = y_hat[:, working_sample]
+    y_broken = y_hat[:, broken_sample]
+
+    _, axes = plt.subplots(nrows=1, ncols=2, figsize=(12, 8))
+    az.plot_posterior(y_working, hdi_prob=prob, ax=axes[0])
+    az.plot_posterior(y_broken, hdi_prob=prob, ax=axes[1])
+    axes[0].set_title('Working Waterpoint Sample', fontsize=20)
+    axes[1].set_title('Broken Waterpoint Sample', fontsize=20)
+    plt.savefig('results/y-distn.pdf', dpi=300, bbox_inches='tight')
 
 
 if __name__ == '__main__':
@@ -139,28 +203,28 @@ if __name__ == '__main__':
 
     # Compute the WAIC comparison between the empirical and uninformed models
     model_dict = compare_models(X, regions, y)
-    # waic_df = az.compare(
-    #     {'uninformed': model_dict['uninformed'], 'empirical': model_dict['empirical']},
-    #     ic='waic', scale='deviance'
-    # )
+    waic_df = az.compare(
+        {'uninformed': model_dict['uninformed'], 'empirical': model_dict['empirical']},
+        ic='waic', scale='deviance'
+    )
 
-    # if not os.path.isdir('results'):
-    #     os.mkdir('results')
+    if not os.path.isdir('results'):
+        os.mkdir('results')
     
-    # waic_df.to_csv('results/waic.csv')
+    waic_df.to_csv('results/waic.csv')
 
-    # # Simple Forest plot comparing the learned interecept distribution for each
-    # # region
-    # fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(10, 10))
-    # az.plot_forest(model_dict['uninformed'], var_names=['α'], ax=axes[0])
-    # az.plot_forest(model_dict['empirical'], var_names=['α'], ax=axes[1])
-    # axes[0].set_ylabel('Uninformed Prior', fontsize=20)
-    # axes[1].set_ylabel('Empirical Prior', fontsize=20)
-    # plt.savefig('results/forestplot.pdf', dpi=300, bbox_inches='tight')
+    # Simple Forest plot comparing the learned interecept distribution for each
+    # region
+    fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(10, 10))
+    az.plot_forest(model_dict['uninformed'], var_names=['α'], ax=axes[0])
+    az.plot_forest(model_dict['empirical'], var_names=['α'], ax=axes[1])
+    axes[0].set_ylabel('Uninformed Prior', fontsize=20)
+    axes[1].set_ylabel('Empirical Prior', fontsize=20)
+    plt.savefig('results/forestplot.pdf', dpi=300, bbox_inches='tight')
 
-    # report = check_model_performance(X, regions, y, model_dict['uninformed'])
-    # report_df = pd.DataFrame(report).transpose()
-    # report_df.to_csv('results/classification_report.csv')
+    report = check_model_performance(X, regions, y, model_dict['uninformed'])
+    report_df = pd.DataFrame(report).transpose()
+    report_df.to_csv('results/classification_report.csv')
 
     # Finally use the prediction bounds to solve the optimization problem
     # for various budgets and degrees of robustness
@@ -197,4 +261,14 @@ if __name__ == '__main__':
             ax=axes[i]
         )
 
+    cbar = fig.colorbar(ScalarMappable(cmap='winter'), ax=axes.ravel().tolist())
+    cbar.set_label('Probability of Working Waterpoint', fontsize=24)
     plt.savefig('results/repairs.pdf', dpi=300, bbox_inches='tight')
+
+    # Another intersesting visualization is to see the range of posterior 
+    # samples for a given feature and region
+    create_shadow_plot(df, model_dict['uninformed'])
+
+    # For the last plot let's see what the posterior distribution estimate
+    # for a given y_i sample
+    make_interval_plot(df)
