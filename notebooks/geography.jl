@@ -86,11 +86,19 @@ Interestingly, it appears that the data creators listed water pumps with (possib
 # ╔═╡ 459e7e20-c65b-4d92-a45c-21d4e611df6f
 df1 = df[(df.longitude .!= 0), :];
 
+# ╔═╡ 995b429b-bd0e-4ae6-ada8-a55a48822e9e
+mkdir(pwd() * "/results")
+
 # ╔═╡ fb929142-d177-4685-b659-cb90b17cd605
 begin
 	p1 = plot(shp)
-	scatter!(p1, df1.longitude, df1.latitude, markersize=0.1, color="black")
+	scatter!(p1, df1.longitude, df1.latitude, markersize=0.4, 
+		     color="black", showaxis=false, grid=false, ticks=false,
+	 		 dpi=300, size=(300, 300), background=:transparent)
 end
+
+# ╔═╡ bfd5ca2f-061b-481a-b367-1209a51d480a
+savefig(pwd() * "/results/tza-map.png")
 
 # ╔═╡ 3bd619a7-7d54-47e0-a8df-ca117ba9ad35
 md"""
@@ -921,9 +929,9 @@ uuid = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
 
 [[Libffi_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
-git-tree-sha1 = "761a393aeccd6aa92ec3515e428c26bf99575b3b"
+git-tree-sha1 = "0b4a5d71f3e5200a7dff793393e09dfc2d874290"
 uuid = "e9f186c6-92d2-5b65-8a66-fee21dc1b490"
-version = "3.2.2+0"
+version = "3.2.2+1"
 
 [[Libgcrypt_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Libgpg_error_jll", "Pkg"]
@@ -1609,7 +1617,9 @@ version = "0.9.1+5"
 # ╠═95a34546-90b2-4df3-8c26-cb2e1d8d3022
 # ╟─190f5259-61aa-4c04-8661-98ec9ef919ef
 # ╠═459e7e20-c65b-4d92-a45c-21d4e611df6f
+# ╠═995b429b-bd0e-4ae6-ada8-a55a48822e9e
 # ╠═fb929142-d177-4685-b659-cb90b17cd605
+# ╠═bfd5ca2f-061b-481a-b367-1209a51d480a
 # ╟─3bd619a7-7d54-47e0-a8df-ca117ba9ad35
 # ╠═bd1e2ecf-dd98-4814-b161-190141b497d1
 # ╠═cb4f4a27-8603-4994-9547-9cfa43f81123

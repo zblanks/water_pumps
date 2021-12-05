@@ -165,7 +165,8 @@ def create_shadow_plot(df, model, col='log_population', region='Dar es Salaam'):
     ax.set_title('Logistic Posterior Distributions', fontsize=32)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    plt.savefig('results/shadowplot.pdf', dpi=300, bbox_inches='tight')
+    plt.savefig('results/shadowplot.pdf', dpi=300, bbox_inches='tight',
+                transparent=True)
 
 
 def make_interval_plot(df, region='Dar es Salaam', prob=0.94):
@@ -187,7 +188,8 @@ def make_interval_plot(df, region='Dar es Salaam', prob=0.94):
     az.plot_posterior(y_broken, hdi_prob=prob, ax=axes[1])
     axes[0].set_title('Working Waterpoint Sample', fontsize=20)
     axes[1].set_title('Broken Waterpoint Sample', fontsize=20)
-    plt.savefig('results/y-distn.pdf', dpi=300, bbox_inches='tight')
+    plt.savefig('results/y-distn.pdf', dpi=300, bbox_inches='tight',
+                transparent=True)
 
 
 if __name__ == '__main__':
@@ -218,9 +220,10 @@ if __name__ == '__main__':
     fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(10, 10))
     az.plot_forest(model_dict['uninformed'], var_names=['α'], ax=axes[0])
     az.plot_forest(model_dict['empirical'], var_names=['α'], ax=axes[1])
-    axes[0].set_ylabel('Uninformed Prior', fontsize=20)
+    axes[0].set_ylabel('Noninformative Prior', fontsize=20)
     axes[1].set_ylabel('Empirical Prior', fontsize=20)
-    plt.savefig('results/forestplot.pdf', dpi=300, bbox_inches='tight')
+    plt.savefig('results/forestplot.pdf', dpi=300, bbox_inches='tight',
+                transparent=True)
 
     report = check_model_performance(X, regions, y, model_dict['uninformed'])
     report_df = pd.DataFrame(report).transpose()
@@ -263,7 +266,8 @@ if __name__ == '__main__':
 
     cbar = fig.colorbar(ScalarMappable(cmap='winter'), ax=axes.ravel().tolist())
     cbar.set_label('Probability of Working Waterpoint', fontsize=24)
-    plt.savefig('results/repairs.pdf', dpi=300, bbox_inches='tight')
+    plt.savefig('results/repairs.pdf', dpi=300, bbox_inches='tight',
+                transparent=True)
 
     # Another intersesting visualization is to see the range of posterior 
     # samples for a given feature and region
