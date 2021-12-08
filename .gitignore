@@ -8,6 +8,3 @@ results/
 
 # Ignore VSCode Helper files
 .vscode/
-
-# The notebooks are not particularly enlightening to outside users
-notebooks/
