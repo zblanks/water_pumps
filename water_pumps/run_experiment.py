@@ -262,7 +262,7 @@ if __name__ == '__main__':
 
     # Using the computed optimal repairs, let's see what the algorithm
     # decided and then plot it on a map
-    shp_file = '/home/zblanks/Documents/uva/fall21/bayesian-ml/project/data/tza/tza.shp'
+    shp_file = 'shape_files/tza.shp'
     sf = shp.Reader(shp_file)
     y_bound = create_prediction_interval(X, regions, model_dict['noninformative'])
     des_coords = get_region_bounds(sf)
