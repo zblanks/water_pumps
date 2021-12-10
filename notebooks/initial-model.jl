@@ -295,14 +295,14 @@ so I won't bother doing that in our model pipeline.
 
 # ╔═╡ 0ade7fd9-257b-4a7e-8583-3bc2ad0fbf94
 md"""
-# Bayesian Model with Uninformed Priors
-To start I want to implement a simple Bayesian model with an uninformed prior.
+# Bayesian Model with noninformative Priors
+To start I want to implement a simple Bayesian model with an noninformative prior.
 This is one of the prior schemas I intend to explore,
 and I think doing this test will help me understang `Turing.jl`'s efficacy.
 """
 
 # ╔═╡ 18a86bf6-bcc1-4250-8a18-d50731f15ede
-@model function uninformed_model(X, regions, y=missing)
+@model function noninformative_model(X, regions, y=missing)
 	p, n = size(X)
 	nregions = length(unique(regions))
 	
@@ -310,7 +310,7 @@ and I think doing this test will help me understang `Turing.jl`'s efficacy.
 		y = Vector{Int64}(undef, n)
 	end
 	
-	# Constructing a one-level hierarchical model with uninformed priors for
+	# Constructing a one-level hierarchical model with noninformative priors for
 	# the TZA administrative regions
 	μₐ ~ Normal(0., 100.)
 	σₐ ~ truncated(Normal(5.), 0., Inf)
@@ -354,7 +354,7 @@ region_map = Dict(zip(sort(unique(train.region)), 1:length(unique(train.region))
 regions = map(x -> region_map[x], train.region)
 
 # ╔═╡ 67ab31a2-072d-4c03-b928-441c9b374477
-model = uninformed_model(X[:, 1:200], regions[1:200], train.status_group[1:200])
+model = noninformative_model(X[:, 1:200], regions[1:200], train.status_group[1:200])
 
 # ╔═╡ 4b8cf134-aa11-4292-a25f-9463731b2df6
 q = sample(model, NUTS(), 1_000)

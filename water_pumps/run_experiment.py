@@ -192,6 +192,16 @@ def make_interval_plot(df, region='Dar es Salaam', prob=0.94):
                 transparent=True)
 
 
+def create_elbo_plot(losses: np.ndarray, prior: str, ax=None):
+    ax.scatter(np.arange(len(losses)), -losses, alpha=0.25, c='black')
+    ax.set_xlabel('Iteration', fontsize=20)
+    ax.set_ylabel('ELBO', fontsize=20)
+    ax.set_title(f'{prior.capitalize()}', fontsize=32)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    return ax
+
+
 if __name__ == '__main__':
     xfile = '/home/zblanks/Documents/uva/fall21/bayesian-ml/project/data/X.csv'
     yfile = '/home/zblanks/Documents/uva/fall21/bayesian-ml/project/data/y.csv'
@@ -203,10 +213,11 @@ if __name__ == '__main__':
     y = df['working_well'].to_numpy()
     regions = df['region_code'].to_numpy()
 
-    # Compute the WAIC comparison between the empirical and uninformed models
-    model_dict = compare_models(X, regions, y)
+    # Compute the WAIC comparison between the empirical and noninformative models
+    model_dict, loss_dict = compare_models(X, regions, y)
     waic_df = az.compare(
-        {'uninformed': model_dict['uninformed'], 'empirical': model_dict['empirical']},
+        {'noninformative': model_dict['noninformative'], 
+        'empirical': model_dict['empirical']},
         ic='waic', scale='deviance'
     )
 
@@ -218,21 +229,29 @@ if __name__ == '__main__':
     # Simple Forest plot comparing the learned interecept distribution for each
     # region
     fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(10, 10))
-    az.plot_forest(model_dict['uninformed'], var_names=['α'], ax=axes[0])
+    az.plot_forest(model_dict['noninformative'], var_names=['α'], ax=axes[0])
     az.plot_forest(model_dict['empirical'], var_names=['α'], ax=axes[1])
     axes[0].set_ylabel('Noninformative Prior', fontsize=20)
     axes[1].set_ylabel('Empirical Prior', fontsize=20)
     plt.savefig('results/forestplot.pdf', dpi=300, bbox_inches='tight',
                 transparent=True)
 
-    report = check_model_performance(X, regions, y, model_dict['uninformed'])
+    # Need to check for convergence using the ELBO plot
+    _, axes = plt.subplots(nrows=1, ncols=2, figsize=(17, 8))
+    for (i, prior) in enumerate(['noninformative', 'empirical']):
+        axes[i] = create_elbo_plot(loss_dict[prior], prior, axes[i])
+    
+    plt.savefig('results/elbo-plot.pdf', dpi=300, bbox_inches='tight',
+                transparent=True)
+
+    report = check_model_performance(X, regions, y, model_dict['noninformative'])
     report_df = pd.DataFrame(report).transpose()
     report_df.to_csv('results/classification_report.csv')
 
     # Finally use the prediction bounds to solve the optimization problem
     # for various budgets and degrees of robustness
     if not os.path.exists('results/optimal_repairs.pkl'):
-        z_star = fix_waterpoints(X, regions, model_dict['uninformed'], df,
+        z_star = fix_waterpoints(X, regions, model_dict['noninformative'], df,
                                  [2, 3], [1000, 10000])
         
         with open('results/optimal_repairs.pkl', 'wb') as file:
@@ -245,7 +264,7 @@ if __name__ == '__main__':
     # decided and then plot it on a map
     shp_file = '/home/zblanks/Documents/uva/fall21/bayesian-ml/project/data/tza/tza.shp'
     sf = shp.Reader(shp_file)
-    y_bound = create_prediction_interval(X, regions, model_dict['uninformed'])
+    y_bound = create_prediction_interval(X, regions, model_dict['noninformative'])
     des_coords = get_region_bounds(sf)
     rng = np.random.default_rng(17)
     c_bar = rng.uniform(100., 2000., size=X.shape[0])
@@ -271,7 +290,7 @@ if __name__ == '__main__':
 
     # Another intersesting visualization is to see the range of posterior 
     # samples for a given feature and region
-    create_shadow_plot(df, model_dict['uninformed'])
+    create_shadow_plot(df, model_dict['noninformative'])
 
     # For the last plot let's see what the posterior distribution estimate
     # for a given y_i sample

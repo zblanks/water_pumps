@@ -15,11 +15,11 @@ def compute_logit(α, θ, x):
     return α + jnp.dot(θ, x)
 
 
-def uninformed_model(X: npt.NDArray, regions: npt.NDArray, y: npt.NDArray):
+def noninformative_model(X: npt.NDArray, regions: npt.NDArray, y: npt.NDArray):
     n, p = X.shape
     n_regions = len(np.unique(regions))
 
-    # Uninformed hyper-priors for the one-level hierarchical model
+    # noninformative hyper-priors for the one-level hierarchical model
     μ_a = numpyro.sample('μ_a', dist.Normal(0., 100.))
     σ_a = numpyro.sample('σ_a', dist.HalfCauchy(5.))
 
@@ -83,17 +83,17 @@ def empirical_model(X: npt.NDArray, regions: npt.NDArray, y: npt.NDArray,
 
 
 def fit_model(X: npt.NDArray, regions: npt.NDArray, y:npt.NDArray, **kwargs):
-    # Giving sensible defaults for MCMC arguments, but allowing user to pass
+    # Giving sensible defaults for SVI arguments, but allowing user to pass
     # different ones if they want
-    default_kwargs = {'seed': 17, 'prior': 'uninformed', 'step_size': 0.005,
+    default_kwargs = {'seed': 17, 'prior': 'noninformative', 'step_size': 0.005,
                       'n_steps': 10000}
     kwargs = {**default_kwargs, **kwargs}
 
     rng_key = random.PRNGKey(kwargs['seed'])
 
-    if kwargs['prior'] == 'uninformed':
-        guide = AutoNormal(uninformed_model)
-        model = SVI(uninformed_model, guide, 
+    if kwargs['prior'] == 'noninformative':
+        guide = AutoNormal(noninformative_model)
+        model = SVI(noninformative_model, guide, 
                     adam(step_size=kwargs['step_size']), Trace_ELBO())
         
         result = model.run(rng_key, kwargs['n_steps'], X, regions, y)
